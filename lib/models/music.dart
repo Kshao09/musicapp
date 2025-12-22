@@ -1,0 +1,39 @@
+class Track {
+  final String id;
+  final String title;
+  final String artist;
+  final Duration duration;
+
+  const Track({
+    required this.id,
+    required this.title,
+    required this.artist,
+    required this.duration,
+  });
+}
+
+class Playlist {
+  final String id;
+  final String name;
+  final String subtitle;
+  final List<Track> track;
+
+  const Playlist({
+    required this.id,
+    required this.name,
+    required this.subtitle,
+    required this.track,
+  });
+}
+
+class Artist {
+  final String id;
+  final String name;
+  final String subtitle;
+
+  const Artist({
+    required this.id,
+    required this.name,
+    required this.subtitle,
+  });
+}
