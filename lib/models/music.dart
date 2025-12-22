@@ -4,11 +4,16 @@ class Track {
   final String artist;
   final Duration duration;
 
+  final String? uri;
+  final String? imageUrl;
+
   const Track({
     required this.id,
     required this.title,
     required this.artist,
     required this.duration,
+    this.uri,
+    this.imageUrl,
   });
 }
 

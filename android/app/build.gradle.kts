@@ -28,6 +28,9 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["redirectSchemeName"] = "musicapp-login"
+        manifestPlaceholders["redirectHostName"] = "callback"
+
     }
 
     buildTypes {
@@ -41,4 +44,8 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    implementation(project(mapOf("path" to ":spotify-app-remote", "configuration" to "default")))
 }

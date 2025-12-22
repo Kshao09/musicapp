@@ -43,6 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/spotify-app-remote/
 
 # Flutter/Dart/Pub
 .dart_tool/
