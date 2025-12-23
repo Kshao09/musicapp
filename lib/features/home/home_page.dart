@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../data/demo_data.dart';
 import '../../models/music.dart';
+import '../../state/player_scope.dart';
 import '../../state/spotify_scope.dart';
 import '../../state/spotify_session.dart';
 import '../../widgets/playlist_card.dart';
@@ -10,7 +11,6 @@ import '../../widgets/section_header.dart';
 import '../../widgets/track_tile.dart';
 import '../library/playlist_detail_page.dart';
 import '../library/spotify_playlist_detail_page.dart';
-
 
 class HomePage extends StatefulWidget {
   final ValueChanged<Track> onPlay;
@@ -27,7 +27,6 @@ class _HomePageState extends State<HomePage> {
   void didChangeDependencies() {
     super.didChangeDependencies();
 
-    // Optional: if user is already logged in and home data is empty, fetch once.
     if (_requestedInitialLoad) return;
     final session = SpotifyScope.of(context);
 
@@ -46,16 +45,17 @@ class _HomePageState extends State<HomePage> {
       title: t.title,
       artist: t.artist,
       duration: t.duration,
-      uri: t.uri, // ✅ add this
+      imageUrl: t.imageUrl, // ✅ IMPORTANT: enables artwork
+      uri: t.uri,
     );
   }
 
   Playlist _toPlaylist(SpotifyPlaylistLite p) {
-    // We only have playlist meta from /me/playlists (tracks not loaded yet)
     return Playlist(
       id: p.id,
       name: p.name,
       subtitle: p.subtitle,
+      imageUrl: p.imageUrl, // ✅ add this
       track: const [],
     );
   }
@@ -63,6 +63,7 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final session = SpotifyScope.of(context);
+    final player = PlayerScope.of(context);
     final demo = DemoData();
 
     final bool useSpotify = session.isLoggedIn;
@@ -74,6 +75,8 @@ class _HomePageState extends State<HomePage> {
     final List<Track> tracks = useSpotify
         ? session.recentlyPlayed.map(_toTrack).toList()
         : demo.tracks;
+
+    final List<Track> quickPicks = tracks.take(5).toList();
 
     Future<void> refresh() async {
       if (!session.isLoggedIn) return;
@@ -125,7 +128,6 @@ class _HomePageState extends State<HomePage> {
                           onTap: () {
                             if (useSpotify) {
                               final pLite = session.myPlaylists[i];
-
                               Navigator.of(context).push(
                                 MaterialPageRoute(
                                   builder: (_) => SpotifyPlaylistDetailPage(
@@ -155,7 +157,6 @@ class _HomePageState extends State<HomePage> {
             const SectionHeader(title: 'Quick Picks', actionText: 'See all'),
             const SizedBox(height: 8),
 
-            // --- Quick Picks list (use recently played when logged in) ---
             if (!session.isLoggedIn)
               Text(
                 "Login to see your real quick picks.",
@@ -166,13 +167,23 @@ class _HomePageState extends State<HomePage> {
                 "Loading your recently played...",
                 style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
               )
-            else if (tracks.isEmpty)
+            else if (quickPicks.isEmpty)
               Text(
                 "No recently played tracks yet.",
                 style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
               )
             else
-              ...tracks.take(5).map((t) => TrackTile(track: t, onTap: () => widget.onPlay(t))),
+              ...List.generate(quickPicks.length, (i) {
+                final t = quickPicks[i];
+                return TrackTile(
+                  track: t,
+                  onTap: () {
+                    // ✅ THIS enables prev/next to work inside Now Playing
+                    player.playFromQueue(quickPicks, i);
+                    widget.onPlay(t); // tells Spotify to play
+                  },
+                );
+              }),
 
             const SizedBox(height: 12),
             const SectionHeader(title: 'Recently Played'),
@@ -193,14 +204,17 @@ class _HomePageState extends State<HomePage> {
                       itemBuilder: (context, i) => _MiniAlbumCard(
                         title: tracks[i].title,
                         subtitle: tracks[i].artist,
-                        onTap: () => widget.onPlay(tracks[i]),
+                        imageUrl: tracks[i].imageUrl,
+                        onTap: () {
+                          player.playFromQueue(tracks, i);
+                          widget.onPlay(tracks[i]);
+                        },
                       ),
                     ),
             ),
 
             const SizedBox(height: 12),
 
-            // Status (helpful while testing)
             if (session.status.isNotEmpty)
               Text(
                 session.status,
@@ -216,12 +230,14 @@ class _HomePageState extends State<HomePage> {
 class _MiniAlbumCard extends StatelessWidget {
   final String title;
   final String subtitle;
-  final VoidCallback onTap;
+  final String? imageUrl;
+  final VoidCallback? onTap;
 
   const _MiniAlbumCard({
     required this.title,
     required this.subtitle,
-    required this.onTap,
+    required this.imageUrl,
+    this.onTap,
   });
 
   @override
@@ -232,8 +248,8 @@ class _MiniAlbumCard extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
       child: Container(
-        width: 170,
-        padding: const EdgeInsets.all(12),
+        width: 160,
+        padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           color: cs.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(16),
@@ -241,32 +257,40 @@ class _MiniAlbumCard extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Container(
-              width: 54,
-              height: 54,
-              decoration: BoxDecoration(
-                color: cs.tertiaryContainer,
-                borderRadius: BorderRadius.circular(14),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                width: 44,
+                height: 44,
+                color: cs.primaryContainer,
+                child: (imageUrl != null && imageUrl!.isNotEmpty)
+                    ? Image.network(
+                        imageUrl!,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) =>
+                            Icon(Icons.album, color: cs.onPrimaryContainer),
+                      )
+                    : Icon(Icons.album, color: cs.onPrimaryContainer),
               ),
-              child: Icon(Icons.album, color: cs.onTertiaryContainer),
             ),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min, // ✅ prevents vertical overflow
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
                     title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w800),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 2),
                   Text(
                     subtitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: cs.onSurfaceVariant),
                   ),
                 ],
               ),
@@ -277,6 +301,7 @@ class _MiniAlbumCard extends StatelessWidget {
     );
   }
 }
+
 
 class _EmptyRowCard extends StatelessWidget {
   final String text;

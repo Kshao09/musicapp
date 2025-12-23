@@ -25,19 +25,38 @@ class PlaylistCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              height: 92,
-              width: double.infinity,
-              decoration: BoxDecoration(
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Container(
+                height: 92,
+                width: double.infinity,
                 color: cs.primaryContainer,
-                borderRadius: BorderRadius.circular(14),
+                child: (playlist.imageUrl != null && playlist.imageUrl!.isNotEmpty)
+                    ? Image.network(
+                        playlist.imageUrl!,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Icon(
+                          Icons.queue_music,
+                          color: cs.onPrimaryContainer,
+                          size: 34,
+                        ),
+                      )
+                    : Icon(Icons.queue_music, color: cs.onPrimaryContainer, size: 34),
               ),
-              child: Icon(Icons.queue_music, color: cs.onPrimaryContainer, size: 34),
             ),
             const SizedBox(height: 10),
-            Text(playlist.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700)),
+            Text(
+              playlist.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
             const SizedBox(height: 4),
-            Text(playlist.subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+            Text(
+              playlist.subtitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
           ],
         ),
       ),

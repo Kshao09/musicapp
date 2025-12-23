@@ -1,6 +1,12 @@
-// lib/state/spotify_session.dart
+import 'dart:typed_data';
+
 import 'package:flutter/foundation.dart';
 import 'package:spotify_sdk/spotify_sdk.dart';
+import 'package:spotify_sdk/models/player_state.dart';
+
+import 'package:spotify_sdk/models/image_uri.dart';
+import 'package:spotify_sdk/enums/image_dimension_enum.dart';
+
 import '../api/spotify_api.dart';
 
 class SpotifySession extends ChangeNotifier {
@@ -39,8 +45,34 @@ class SpotifySession extends ChangeNotifier {
 
   bool _remoteConnected = false;
 
+  // After we detect "seeking disabled" once, we disable slider dragging
+  bool canSeek = true;
+
   static const _scope =
       "user-read-email,user-read-private,user-read-recently-played,playlist-read-private";
+
+  // Live player state stream (slider / paused / duration)
+  Stream<PlayerState> subscribePlayerState() => SpotifySdk.subscribePlayerState();
+
+  Future<void> connectRemoteIfNeeded() async {
+    if (_remoteConnected) return;
+    try {
+      await SpotifySdk.connectToSpotifyRemote(
+        clientId: clientId,
+        redirectUrl: redirectUrl,
+      );
+      _remoteConnected = true;
+    } catch (e) {
+      status = "❌ Remote connect failed: $e";
+      notifyListeners();
+    }
+  }
+
+  Future<void> _ensureRemote() async {
+    if (_remoteConnected) return;
+    await SpotifySdk.connectToSpotifyRemote(clientId: clientId, redirectUrl: redirectUrl);
+    _remoteConnected = true;
+  }
 
   Future<void> login() async {
     if (_isBusy) return;
@@ -95,6 +127,8 @@ class SpotifySession extends ChangeNotifier {
     recentlyPlayed = [];
     playlistTracksCache.clear();
 
+    canSeek = true;
+
     status = "Logged out";
     notifyListeners();
 
@@ -132,13 +166,11 @@ class SpotifySession extends ChangeNotifier {
     }
   }
 
-  /// ✅ Load tracks of a playlist (Spotify Web API) + cache
   Future<List<SpotifyTrackLite>> loadPlaylistTracks(String playlistId) async {
     if (!_isLoggedIn) return const [];
     final token = await _ensureToken();
     if (token == null) return const [];
 
-    // cache hit
     final cached = playlistTracksCache[playlistId];
     if (cached != null && cached.isNotEmpty) return cached;
 
@@ -148,7 +180,7 @@ class SpotifySession extends ChangeNotifier {
       final tracksJson = await _api.getPlaylistTracks(token, playlistId, limit: 50, offset: 0);
 
       final tracks = tracksJson
-          .whereType<Map<String, dynamic>>() // safe cast
+          .whereType<Map<String, dynamic>>()
           .map((j) => SpotifyTrackLite.fromJson(j))
           .toList();
 
@@ -166,7 +198,6 @@ class SpotifySession extends ChangeNotifier {
     }
   }
 
-  /// ✅ Play a Spotify URI (requires App Remote connected)
   Future<void> playUri(String uri) async {
     if (!_isLoggedIn) {
       status = "❌ Login first";
@@ -176,12 +207,7 @@ class SpotifySession extends ChangeNotifier {
     if (uri.isEmpty) return;
 
     try {
-      // If remote is not connected (or got disconnected), reconnect once.
-      if (!_remoteConnected) {
-        await SpotifySdk.connectToSpotifyRemote(clientId: clientId, redirectUrl: redirectUrl);
-        _remoteConnected = true;
-      }
-
+      await _ensureRemote();
       await SpotifySdk.play(spotifyUri: uri);
       status = "▶️ Playing";
       notifyListeners();
@@ -191,10 +217,10 @@ class SpotifySession extends ChangeNotifier {
     }
   }
 
-  /// ✅ Pause/Resume (these exist in spotify_sdk) :contentReference[oaicite:0]{index=0}
   Future<void> pause() async {
     if (!_isLoggedIn) return;
     try {
+      await _ensureRemote();
       await SpotifySdk.pause();
       status = "⏸ Paused";
       notifyListeners();
@@ -207,12 +233,85 @@ class SpotifySession extends ChangeNotifier {
   Future<void> resume() async {
     if (!_isLoggedIn) return;
     try {
+      await _ensureRemote();
       await SpotifySdk.resume();
       status = "▶️ Playing";
       notifyListeners();
     } catch (e) {
       status = "❌ Resume failed: $e";
       notifyListeners();
+    }
+  }
+
+  Future<Uint8List?> getImageBytes(
+    String imageUriRaw, {
+    ImageDimension dimension = ImageDimension.large,
+  }) async {
+    if (!_isLoggedIn) return null;
+    try {
+      await _ensureRemote();
+      return SpotifySdk.getImage(
+        imageUri: ImageUri(imageUriRaw),
+        dimension: dimension,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ✅ Seek (returns success; on free it often fails, so we disable dragging after first failure)
+  Future<bool> seekTo(Duration position) async {
+    if (!_isLoggedIn) return false;
+    try {
+      await _ensureRemote();
+      await SpotifySdk.seekTo(positionedMilliseconds: position.inMilliseconds);
+      return true;
+    } catch (e) {
+      status = "❌ Seek failed: $e";
+      canSeek = false; // free account commonly hits this
+      notifyListeners();
+      return false;
+    }
+  }
+
+    // --- Search state (optional) ---
+  List<SpotifyTrackLite> lastSearch = [];
+  String lastSearchQuery = "";
+
+  /// ✅ NEW: Search tracks via Spotify Web API
+  Future<List<SpotifyTrackLite>> searchTracksLite(
+    String query, {
+    int limit = 20,
+    int offset = 0,
+  }) async {
+    if (!_isLoggedIn) return const [];
+    final token = await _ensureToken();
+    if (token == null) return const [];
+
+    final q = query.trim();
+    if (q.isEmpty) return const [];
+
+    _setBusy(true, "Searching...");
+
+    try {
+      final json = await _api.searchTracks(token, q, limit: limit, offset: offset);
+      final tracks = json
+          .whereType<Map<String, dynamic>>()
+          .map((j) => SpotifyTrackLite.fromJson(j))
+          .toList();
+
+      lastSearch = tracks;
+      lastSearchQuery = q;
+
+      status = "✅ Search complete";
+      notifyListeners();
+      return tracks;
+    } catch (e) {
+      status = "❌ Search failed: $e";
+      notifyListeners();
+      return const [];
+    } finally {
+      _setBusy(false, status);
     }
   }
 

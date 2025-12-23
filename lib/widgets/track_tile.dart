@@ -15,14 +15,21 @@ class TrackTile extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 10),
       child: ListTile(
         onTap: onTap,
-        leading: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
+        leading: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            width: 44,
+            height: 44,
             color: cs.secondaryContainer,
-            borderRadius: BorderRadius.circular(12),
+            child: (track.imageUrl != null && track.imageUrl!.isNotEmpty)
+                ? Image.network(
+                    track.imageUrl!,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) =>
+                        Icon(Icons.music_note, color: cs.onSecondaryContainer),
+                  )
+                : Icon(Icons.music_note, color: cs.onSecondaryContainer),
           ),
-          child: Icon(Icons.music_note, color: cs.onSecondaryContainer),
         ),
         title: Text(track.title, maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: Text(track.artist, maxLines: 1, overflow: TextOverflow.ellipsis),

@@ -1,4 +1,3 @@
-// lib/app_shell.dart
 import 'package:flutter/material.dart';
 
 import '../features/home/home_page.dart';
@@ -21,12 +20,11 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   int _index = 0;
 
-  // ✅ Step 3: update UI player + play on Spotify (if uri exists)
   void _play(Track t) {
-    // update your UI player state (mini player / now playing page)
-    PlayerScope.of(context).play(t);
+    // ✅ IMPORTANT: PlayerController.play() preserves queue if t is inside it
+    final player = PlayerScope.of(context);
+    player.play(t);
 
-    // play in Spotify app if we have a Spotify URI
     final session = SpotifyScope.of(context);
     final uri = t.uri;
     if (session.isLoggedIn && uri != null && uri.isNotEmpty) {
@@ -34,22 +32,21 @@ class _AppShellState extends State<AppShell> {
     }
   }
 
-  // ✅ Step 4: toggle play/pause on UI + Spotify
   Future<void> _togglePlayPause() async {
     final player = PlayerScope.of(context);
     final session = SpotifyScope.of(context);
 
-    // Best effort: control Spotify playback if logged in
     if (session.isLoggedIn) {
       if (player.isPlaying) {
         await session.pause();
+        player.setIsPlaying(false);
       } else {
         await session.resume();
+        player.setIsPlaying(true);
       }
+    } else {
+      player.toggle();
     }
-
-    // Always update UI state too
-    player.toggle();
   }
 
   void _openNowPlaying() {
