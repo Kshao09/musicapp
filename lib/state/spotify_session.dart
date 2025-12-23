@@ -49,7 +49,8 @@ class SpotifySession extends ChangeNotifier {
   bool canSeek = true;
 
   static const _scope =
-      "user-read-email,user-read-private,user-read-recently-played,playlist-read-private";
+  "user-read-email,user-read-private,user-read-recently-played,playlist-read-private,user-library-read,user-library-modify";
+
 
   // Live player state stream (slider / paused / duration)
   Stream<PlayerState> subscribePlayerState() => SpotifySdk.subscribePlayerState();
@@ -64,6 +65,66 @@ class SpotifySession extends ChangeNotifier {
       _remoteConnected = true;
     } catch (e) {
       status = "❌ Remote connect failed: $e";
+      notifyListeners();
+    }
+  }
+
+    // --- Saved (Liked) cache ---
+  final Map<String, bool> _savedCache = {};
+  final Set<String> _savedInFlight = {};
+
+  bool? savedStatusOf(String trackId) => _savedCache[trackId];
+
+  /// Fire-and-forget: fetch saved status once (prevents spamming)
+  Future<void> warmSavedStatus(String trackId) async {
+    if (!_isLoggedIn) return;
+    if (trackId.isEmpty) return;
+    if (_savedCache.containsKey(trackId)) return;
+    if (_savedInFlight.contains(trackId)) return;
+
+    _savedInFlight.add(trackId);
+    try {
+      final token = await _ensureToken();
+      if (token == null) return;
+
+      final res = await _api.areTracksSaved(token, [trackId]);
+      _savedCache[trackId] = res.isNotEmpty ? res.first : false;
+      notifyListeners();
+    } catch (_) {
+      // ignore
+    } finally {
+      _savedInFlight.remove(trackId);
+    }
+  }
+
+  Future<void> toggleSaved(String trackId) async {
+    if (!_isLoggedIn) return;
+    if (trackId.isEmpty) return;
+
+    final token = await _ensureToken();
+    if (token == null) return;
+
+    // ensure we know current state
+    if (!_savedCache.containsKey(trackId)) {
+      final res = await _api.areTracksSaved(token, [trackId]);
+      _savedCache[trackId] = res.isNotEmpty ? res.first : false;
+    }
+
+    final currentlySaved = _savedCache[trackId] == true;
+
+    try {
+      if (currentlySaved) {
+        await _api.removeSavedTracks(token, [trackId]);
+        _savedCache[trackId] = false;
+        status = "Removed from Liked Songs";
+      } else {
+        await _api.saveTracks(token, [trackId]);
+        _savedCache[trackId] = true;
+        status = "Added to Liked Songs";
+      }
+      notifyListeners();
+    } catch (e) {
+      status = "❌ Like failed: $e";
       notifyListeners();
     }
   }
@@ -273,6 +334,37 @@ class SpotifySession extends ChangeNotifier {
       return false;
     }
   }
+
+    /// ✅ Load liked songs (saved tracks)
+  Future<List<SpotifyTrackLite>> loadLikedSongsLite({
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    if (!_isLoggedIn) return const [];
+    final token = await _ensureToken();
+    if (token == null) return const [];
+
+    _setBusy(true, "Loading liked songs...");
+
+    try {
+      final json = await _api.getLikedSongs(token, limit: limit, offset: offset);
+      final tracks = json
+          .whereType<Map<String, dynamic>>()
+          .map((j) => SpotifyTrackLite.fromJson(j))
+          .toList();
+
+      status = "✅ Liked songs loaded";
+      notifyListeners();
+      return tracks;
+    } catch (e) {
+      status = "❌ Failed loading liked songs: $e";
+      notifyListeners();
+      return const [];
+    } finally {
+      _setBusy(false, status);
+    }
+  }
+
 
     // --- Search state (optional) ---
   List<SpotifyTrackLite> lastSearch = [];
