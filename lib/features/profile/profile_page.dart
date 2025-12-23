@@ -1,12 +1,13 @@
-// lib/features/profile/profile_page.dart
 import 'package:flutter/material.dart';
 
 import '../../state/spotify_scope.dart';
 import '../library/liked_songs_page.dart';
 import '../../models/music.dart';
 import '../../state/player_scope.dart';
+
 import 'settings_page.dart';
 import 'about_page.dart';
+import 'listening_history_page.dart';
 
 class ProfilePage extends StatelessWidget {
   const ProfilePage({super.key});
@@ -181,7 +182,7 @@ class ProfilePage extends StatelessWidget {
 
             const SizedBox(height: 18),
 
-            // ✅ Settings + About navigation (not const)
+            // ✅ Menu
             Card(
               child: Column(
                 children: [
@@ -192,6 +193,19 @@ class ProfilePage extends StatelessWidget {
                     onTap: () {
                       Navigator.of(context).push(
                         MaterialPageRoute(builder: (_) => const SettingsPage()),
+                      );
+                    },
+                  ),
+                  const Divider(height: 0),
+                  ListTile(
+                    leading: const Icon(Icons.history),
+                    title: const Text('Listening History'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => ListeningHistoryPage(onPlay: playTrack),
+                        ),
                       );
                     },
                   ),

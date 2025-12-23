@@ -129,6 +129,20 @@ class SpotifySession extends ChangeNotifier {
     }
   }
 
+    // allow Settings page to toggle seek UI behavior
+  void setCanSeek(bool value) {
+    canSeek = value;
+    notifyListeners();
+  }
+
+  // clear caches used by Library/Liked
+  void clearCaches() {
+    playlistTracksCache.clear();
+    _savedCache.clear();        // if you added this earlier
+    status = "Caches cleared";
+    notifyListeners();
+  }
+
   Future<void> _ensureRemote() async {
     if (_remoteConnected) return;
     await SpotifySdk.connectToSpotifyRemote(clientId: clientId, redirectUrl: redirectUrl);
