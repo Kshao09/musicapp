@@ -1,9 +1,7 @@
 import 'dart:typed_data';
-
 import 'package:flutter/foundation.dart';
 import 'package:spotify_sdk/spotify_sdk.dart';
 import 'package:spotify_sdk/models/player_state.dart';
-
 import 'package:spotify_sdk/models/image_uri.dart';
 import 'package:spotify_sdk/enums/image_dimension_enum.dart';
 
@@ -20,12 +18,10 @@ class SpotifySession extends ChangeNotifier {
 
   final SpotifyApi _api = SpotifyApi();
 
-  // UI state
   String status = "Not logged in";
   bool _isBusy = false;
   bool get isBusy => _isBusy;
 
-  // Auth/profile
   bool _isLoggedIn = false;
   bool get isLoggedIn => _isLoggedIn;
 
@@ -36,24 +32,25 @@ class SpotifySession extends ChangeNotifier {
   String? email;
   String? avatarUrl;
 
-  // Home data
   List<SpotifyPlaylistLite> myPlaylists = [];
   List<SpotifyTrackLite> recentlyPlayed = [];
 
-  // Cache: playlistId -> tracks
   final Map<String, List<SpotifyTrackLite>> playlistTracksCache = {};
 
   bool _remoteConnected = false;
 
-  // After we detect "seeking disabled" once, we disable slider dragging
+  // if seek fails once, we disable slider dragging
   bool canSeek = true;
 
   static const _scope =
-  "user-read-email,user-read-private,user-read-recently-played,playlist-read-private,user-library-read,user-library-modify";
+      "user-read-email,user-read-private,user-read-recently-played,"
+      "playlist-read-private,user-library-read,user-library-modify";
 
+  // NOTE: subscribe doesn't emit continuous playbackPosition updates
+  late final Stream<PlayerState> _playerStateStream =
+      SpotifySdk.subscribePlayerState().asBroadcastStream();
 
-  // Live player state stream (slider / paused / duration)
-  Stream<PlayerState> subscribePlayerState() => SpotifySdk.subscribePlayerState();
+  Stream<PlayerState> subscribePlayerState() => _playerStateStream;
 
   Future<void> connectRemoteIfNeeded() async {
     if (_remoteConnected) return;
@@ -69,13 +66,32 @@ class SpotifySession extends ChangeNotifier {
     }
   }
 
-    // --- Saved (Liked) cache ---
+  Future<void> _ensureRemote() async {
+    if (_remoteConnected) return;
+    await SpotifySdk.connectToSpotifyRemote(
+      clientId: clientId,
+      redirectUrl: redirectUrl,
+    );
+    _remoteConnected = true;
+  }
+
+  // ✅ Seed/poll current state (needed because subscribe doesn't emit progress)
+  Future<PlayerState?> getCurrentPlayerState() async {
+    if (!_isLoggedIn) return null;
+    try {
+      await _ensureRemote();
+      return await SpotifySdk.getPlayerState();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // --- Saved cache ---
   final Map<String, bool> _savedCache = {};
   final Set<String> _savedInFlight = {};
 
   bool? savedStatusOf(String trackId) => _savedCache[trackId];
 
-  /// Fire-and-forget: fetch saved status once (prevents spamming)
   Future<void> warmSavedStatus(String trackId) async {
     if (!_isLoggedIn) return;
     if (trackId.isEmpty) return;
@@ -100,14 +116,12 @@ class SpotifySession extends ChangeNotifier {
   Future<void> toggleSaved(String trackId) async {
     if (!_isLoggedIn) return;
     if (trackId.isEmpty) return;
-
     final token = await _ensureToken();
     if (token == null) return;
 
-    // ensure we know current state
+    // if unknown, warm first
     if (!_savedCache.containsKey(trackId)) {
-      final res = await _api.areTracksSaved(token, [trackId]);
-      _savedCache[trackId] = res.isNotEmpty ? res.first : false;
+      await warmSavedStatus(trackId);
     }
 
     final currentlySaved = _savedCache[trackId] == true;
@@ -129,30 +143,23 @@ class SpotifySession extends ChangeNotifier {
     }
   }
 
-    // allow Settings page to toggle seek UI behavior
+  // allow Settings page to toggle seek UI behavior
   void setCanSeek(bool value) {
     canSeek = value;
     notifyListeners();
   }
 
-  // clear caches used by Library/Liked
   void clearCaches() {
     playlistTracksCache.clear();
-    _savedCache.clear();        // if you added this earlier
+    _savedCache.clear();
     status = "Caches cleared";
     notifyListeners();
-  }
-
-  Future<void> _ensureRemote() async {
-    if (_remoteConnected) return;
-    await SpotifySdk.connectToSpotifyRemote(clientId: clientId, redirectUrl: redirectUrl);
-    _remoteConnected = true;
   }
 
   Future<void> login() async {
     if (_isBusy) return;
 
-    _setBusy(true, "Connecting to Spotify...");
+    _setBusy(true, "Connecting to Spotify.");
 
     try {
       await SpotifySdk.connectToSpotifyRemote(
@@ -161,7 +168,7 @@ class SpotifySession extends ChangeNotifier {
       );
       _remoteConnected = true;
 
-      _setBusy(true, "Getting access token...");
+      _setBusy(true, "Getting access token.");
 
       final token = await SpotifySdk.getAccessToken(
         clientId: clientId,
@@ -172,7 +179,7 @@ class SpotifySession extends ChangeNotifier {
       accessToken = token;
       _tokenExpiresAt = DateTime.now().add(const Duration(minutes: 50));
 
-      _setBusy(true, "Fetching profile (/me) ...");
+      _setBusy(true, "Fetching profile (/me).");
       await _loadMe();
 
       _isLoggedIn = true;
@@ -213,12 +220,27 @@ class SpotifySession extends ChangeNotifier {
     _remoteConnected = false;
   }
 
+  // ---------- DEDUPE HELPERS ----------
+  List<SpotifyTrackLite> _dedupeTracks(List<SpotifyTrackLite> tracks) {
+    final seen = <String>{};
+    final out = <SpotifyTrackLite>[];
+
+    for (final t in tracks) {
+      final key = (t.uri != null && t.uri!.isNotEmpty)
+          ? t.uri!
+          : (t.id.isNotEmpty ? t.id : "${t.title}|${t.artist}|${t.duration.inMilliseconds}");
+
+      if (seen.add(key)) out.add(t);
+    }
+    return out;
+  }
+
   Future<void> loadHome() async {
     if (!_isLoggedIn) return;
     final token = await _ensureToken();
     if (token == null) return;
 
-    _setBusy(true, "Loading home data...");
+    _setBusy(true, "Loading home data.");
 
     try {
       final playlistsJson = await _api.getMyPlaylists(token, limit: 20, offset: 0);
@@ -226,10 +248,14 @@ class SpotifySession extends ChangeNotifier {
           .map((j) => SpotifyPlaylistLite.fromJson(j as Map<String, dynamic>))
           .toList();
 
-      final recentJson = await _api.getRecentlyPlayed(token, limit: 10);
-      recentlyPlayed = recentJson
-          .map((j) => SpotifyTrackLite.fromJson(j as Map<String, dynamic>))
-          .toList();
+      final recentJson = await _api.getRecentlyPlayed(token, limit: 30);
+
+      // ✅ Dedupe here so UI never sees duplicates
+      recentlyPlayed = _dedupeTracks(
+        recentJson
+            .map((j) => SpotifyTrackLite.fromJson(j as Map<String, dynamic>))
+            .toList(),
+      );
 
       status = "✅ Home data updated";
       notifyListeners();
@@ -249,15 +275,17 @@ class SpotifySession extends ChangeNotifier {
     final cached = playlistTracksCache[playlistId];
     if (cached != null && cached.isNotEmpty) return cached;
 
-    _setBusy(true, "Loading playlist tracks...");
+    _setBusy(true, "Loading playlist tracks.");
 
     try {
       final tracksJson = await _api.getPlaylistTracks(token, playlistId, limit: 50, offset: 0);
 
-      final tracks = tracksJson
-          .whereType<Map<String, dynamic>>()
-          .map((j) => SpotifyTrackLite.fromJson(j))
-          .toList();
+      final tracks = _dedupeTracks(
+        tracksJson
+            .whereType<Map<String, dynamic>>()
+            .map((j) => SpotifyTrackLite.fromJson(j))
+            .toList(),
+      );
 
       playlistTracksCache[playlistId] = tracks;
 
@@ -266,6 +294,85 @@ class SpotifySession extends ChangeNotifier {
       return tracks;
     } catch (e) {
       status = "❌ Failed loading playlist: $e";
+      notifyListeners();
+      return const [];
+    } finally {
+      _setBusy(false, status);
+    }
+  }
+
+  // ✅ Alias so your UI can call either name
+  Future<List<SpotifyTrackLite>> loadPlaylistTracksLite(String playlistId) =>
+      loadPlaylistTracks(playlistId);
+
+  /// ✅ Load liked songs (saved tracks)
+  Future<List<SpotifyTrackLite>> loadLikedSongsLite({
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    if (!_isLoggedIn) return const [];
+    final token = await _ensureToken();
+    if (token == null) return const [];
+
+    _setBusy(true, "Loading liked songs.");
+
+    try {
+      final json = await _api.getLikedSongs(token, limit: limit, offset: offset);
+      final tracks = _dedupeTracks(
+        json
+            .whereType<Map<String, dynamic>>()
+            .map((j) => SpotifyTrackLite.fromJson(j))
+            .toList(),
+      );
+
+      status = "✅ Liked songs loaded";
+      notifyListeners();
+      return tracks;
+    } catch (e) {
+      status = "❌ Failed loading liked songs: $e";
+      notifyListeners();
+      return const [];
+    } finally {
+      _setBusy(false, status);
+    }
+  }
+
+  // --- Search state (optional) ---
+  List<SpotifyTrackLite> lastSearch = [];
+  String lastSearchQuery = "";
+
+  /// ✅ Search tracks via Spotify Web API
+  Future<List<SpotifyTrackLite>> searchTracksLite(
+    String query, {
+    int limit = 20,
+    int offset = 0,
+  }) async {
+    if (!_isLoggedIn) return const [];
+    final token = await _ensureToken();
+    if (token == null) return const [];
+
+    final q = query.trim();
+    if (q.isEmpty) return const [];
+
+    _setBusy(true, "Searching.");
+
+    try {
+      final json = await _api.searchTracks(token, q, limit: limit, offset: offset);
+      final tracks = _dedupeTracks(
+        json
+            .whereType<Map<String, dynamic>>()
+            .map((j) => SpotifyTrackLite.fromJson(j))
+            .toList(),
+      );
+
+      lastSearch = tracks;
+      lastSearchQuery = q;
+
+      status = "✅ Search complete";
+      notifyListeners();
+      return tracks;
+    } catch (e) {
+      status = "❌ Search failed: $e";
       notifyListeners();
       return const [];
     } finally {
@@ -318,22 +425,6 @@ class SpotifySession extends ChangeNotifier {
     }
   }
 
-  Future<Uint8List?> getImageBytes(
-    String imageUriRaw, {
-    ImageDimension dimension = ImageDimension.large,
-  }) async {
-    if (!_isLoggedIn) return null;
-    try {
-      await _ensureRemote();
-      return SpotifySdk.getImage(
-        imageUri: ImageUri(imageUriRaw),
-        dimension: dimension,
-      );
-    } catch (_) {
-      return null;
-    }
-  }
-
   // ✅ Seek (returns success; on free it often fails, so we disable dragging after first failure)
   Future<bool> seekTo(Duration position) async {
     if (!_isLoggedIn) return false;
@@ -349,75 +440,19 @@ class SpotifySession extends ChangeNotifier {
     }
   }
 
-    /// ✅ Load liked songs (saved tracks)
-  Future<List<SpotifyTrackLite>> loadLikedSongsLite({
-    int limit = 50,
-    int offset = 0,
+  Future<Uint8List?> getImageBytes(
+    String imageUriRaw, {
+    ImageDimension dimension = ImageDimension.large,
   }) async {
-    if (!_isLoggedIn) return const [];
-    final token = await _ensureToken();
-    if (token == null) return const [];
-
-    _setBusy(true, "Loading liked songs...");
-
+    if (!_isLoggedIn) return null;
     try {
-      final json = await _api.getLikedSongs(token, limit: limit, offset: offset);
-      final tracks = json
-          .whereType<Map<String, dynamic>>()
-          .map((j) => SpotifyTrackLite.fromJson(j))
-          .toList();
-
-      status = "✅ Liked songs loaded";
-      notifyListeners();
-      return tracks;
-    } catch (e) {
-      status = "❌ Failed loading liked songs: $e";
-      notifyListeners();
-      return const [];
-    } finally {
-      _setBusy(false, status);
-    }
-  }
-
-
-    // --- Search state (optional) ---
-  List<SpotifyTrackLite> lastSearch = [];
-  String lastSearchQuery = "";
-
-  /// ✅ NEW: Search tracks via Spotify Web API
-  Future<List<SpotifyTrackLite>> searchTracksLite(
-    String query, {
-    int limit = 20,
-    int offset = 0,
-  }) async {
-    if (!_isLoggedIn) return const [];
-    final token = await _ensureToken();
-    if (token == null) return const [];
-
-    final q = query.trim();
-    if (q.isEmpty) return const [];
-
-    _setBusy(true, "Searching...");
-
-    try {
-      final json = await _api.searchTracks(token, q, limit: limit, offset: offset);
-      final tracks = json
-          .whereType<Map<String, dynamic>>()
-          .map((j) => SpotifyTrackLite.fromJson(j))
-          .toList();
-
-      lastSearch = tracks;
-      lastSearchQuery = q;
-
-      status = "✅ Search complete";
-      notifyListeners();
-      return tracks;
-    } catch (e) {
-      status = "❌ Search failed: $e";
-      notifyListeners();
-      return const [];
-    } finally {
-      _setBusy(false, status);
+      await _ensureRemote();
+      return SpotifySdk.getImage(
+        imageUri: ImageUri(imageUriRaw),
+        dimension: dimension,
+      );
+    } catch (_) {
+      return null;
     }
   }
 
@@ -474,7 +509,6 @@ class SpotifySession extends ChangeNotifier {
 }
 
 // ----- Lite models -----
-
 class SpotifyPlaylistLite {
   final String id;
   final String name;
@@ -526,10 +560,12 @@ class SpotifyTrackLite {
 
   factory SpotifyTrackLite.fromJson(Map<String, dynamic> j) {
     final artists = (j["artists"] as List?) ?? const [];
-    final artist = artists.isNotEmpty ? (artists.first["name"] ?? "Unknown") : "Unknown";
+    final artist =
+        artists.isNotEmpty ? (artists.first["name"] ?? "Unknown") : "Unknown";
 
     final albumImages = (j["album"]?["images"] as List?) ?? const [];
-    final imageUrl = albumImages.isNotEmpty ? albumImages.first["url"] as String? : null;
+    final imageUrl =
+        albumImages.isNotEmpty ? albumImages.first["url"] as String? : null;
 
     final ms = (j["duration_ms"] as int?) ?? 0;
 

@@ -129,20 +129,25 @@ class SpotifyApi {
   }
 
   /// ✅ NEW: Search tracks (Spotify Web API)
-  Future<List<dynamic>> searchTracks(
+    Future<List<dynamic>> searchTracks(
     String token,
     String query, {
-    int limit = 20,
+    int limit = 25,
     int offset = 0,
   }) async {
-    final q = Uri.encodeQueryComponent(query.trim());
-    final url = Uri.parse("$_base/search?q=$q&type=track&limit=$limit&offset=$offset");
-    final res = await http.get(url, headers: _headers(token));
-    if (res.statusCode != 200) {
-      throw Exception("Spotify API ${res.statusCode}: $url\n${res.body}");
+    final q = Uri.encodeQueryComponent(query);
+    final uri = Uri.parse(
+      "$_base/search?q=$q&type=track&limit=$limit&offset=$offset",
+    );
+
+    final res = await http.get(uri, headers: _headers(token));
+
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw Exception("Search HTTP ${res.statusCode}: ${res.body}");
     }
-    final data = jsonDecode(res.body) as Map<String, dynamic>;
-    final tracks = (data["tracks"] as Map<String, dynamic>?)?["items"] as List?;
-    return tracks ?? const [];
+
+    final json = jsonDecode(res.body) as Map<String, dynamic>;
+    final tracksObj = (json["tracks"] as Map?) ?? const {};
+    return (tracksObj["items"] as List?) ?? const [];
   }
 }

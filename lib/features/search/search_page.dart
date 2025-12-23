@@ -1,5 +1,4 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
 
 import '../../data/demo_data.dart';
@@ -8,6 +7,7 @@ import '../../state/player_scope.dart';
 import '../../state/spotify_scope.dart';
 import '../../state/spotify_session.dart';
 import '../../widgets/track_tile.dart';
+import '../../widgets/track_actions_sheet.dart';
 
 class SearchPage extends StatefulWidget {
   final ValueChanged<Track> onPlay;
@@ -44,6 +44,19 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
+  // ✅ Step 5: unique tracks only (uri > id > fallback)
+  List<Track> _uniqueTracks(List<Track> items) {
+    final seen = <String>{};
+    final out = <Track>[];
+    for (final t in items) {
+      final key = (t.uri != null && t.uri!.isNotEmpty)
+          ? t.uri!
+          : (t.id.isNotEmpty ? t.id : "${t.title}|${t.artist}|${t.duration.inMilliseconds}");
+      if (seen.add(key)) out.add(t);
+    }
+    return out;
+  }
+
   Future<void> _runSearch(String q) async {
     final session = SpotifyScope.of(context);
 
@@ -59,11 +72,12 @@ class _SearchPageState extends State<SearchPage> {
       final lower = query.toLowerCase();
       final tracks = demo.tracks.where((t) {
         if (lower.isEmpty) return true;
-        return t.title.toLowerCase().contains(lower) || t.artist.toLowerCase().contains(lower);
+        return t.title.toLowerCase().contains(lower) ||
+            t.artist.toLowerCase().contains(lower);
       }).toList();
 
       setState(() {
-        _results = tracks;
+        _results = _uniqueTracks(tracks);
         _loading = false;
       });
       return;
@@ -78,7 +92,7 @@ class _SearchPageState extends State<SearchPage> {
     }
 
     final lite = await session.searchTracksLite(query, limit: 25, offset: 0);
-    final tracks = lite.map(_toTrack).toList();
+    final tracks = _uniqueTracks(lite.map(_toTrack).toList());
 
     if (!mounted) return;
     setState(() {
@@ -99,6 +113,7 @@ class _SearchPageState extends State<SearchPage> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final session = SpotifyScope.of(context);
+    final player = PlayerScope.of(context);
 
     return Scaffold(
       appBar: AppBar(
@@ -139,16 +154,16 @@ class _SearchPageState extends State<SearchPage> {
                   separatorBuilder: (_, __) => const SizedBox(height: 8),
                   itemBuilder: (context, i) {
                     final t = _results[i];
-                    return TrackTile(
+                    return GestureDetector(
+                      onLongPress: () => showTrackActionsSheet(context, track: t),
+                      child: TrackTile(
                       track: t,
                       onTap: () {
-                        // ✅ Set queue so next/prev is deterministic
-                        PlayerScope.of(context).playFromQueue(_results, i);
-
-                        // ✅ Play selected item
+                        // ✅ Step 4: set queue so next/prev works
+                        player.playFromQueue(_results, i);
                         widget.onPlay(t);
                       },
-                    );
+                    ));
                   },
                 ),
     );

@@ -4,6 +4,7 @@ import '../../models/music.dart';
 import '../../state/player_scope.dart';
 import '../../state/spotify_scope.dart';
 import '../../widgets/track_tile.dart';
+import '../../widgets/track_actions_sheet.dart';
 
 class ListeningHistoryPage extends StatefulWidget {
   final ValueChanged<Track> onPlay;
@@ -103,14 +104,16 @@ class _ListeningHistoryPageState extends State<ListeningHistoryPage> {
                           separatorBuilder: (_, __) => const SizedBox(height: 8),
                           itemBuilder: (context, i) {
                             final t = _tracks[i];
-                            return TrackTile(
+                            return GestureDetector(
+                              onLongPress: () => showTrackActionsSheet(context, track: t),
+                              child: TrackTile(
                               track: t,
                               onTap: () {
                                 // ✅ Set queue so next/prev works through history
                                 PlayerScope.of(context).playFromQueue(_tracks, i);
                                 widget.onPlay(t);
                               },
-                            );
+                            ));
                           },
                         ),
             ),

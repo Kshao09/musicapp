@@ -1,6 +1,7 @@
-// lib/features/library/playlist_detail_page.dart
 import 'package:flutter/material.dart';
+
 import '../../models/music.dart';
+import '../../state/player_scope.dart';
 
 class PlaylistDetailPage extends StatelessWidget {
   final Playlist playlist;
@@ -12,16 +13,16 @@ class PlaylistDetailPage extends StatelessWidget {
     required this.onPlay,
   });
 
-
   String _formatDuration(Duration duration) {
     final minutes = duration.inMinutes;
     final seconds = duration.inSeconds % 60;
-    return '${minutes}:${seconds.toString().padLeft(2, '0')}';
+    return '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final player = PlayerScope.of(context);
 
     return Scaffold(
       appBar: AppBar(title: Text(playlist.name)),
@@ -53,11 +54,15 @@ class PlaylistDetailPage extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(playlist.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                        Text(
+                          playlist.name,
+                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                        ),
                         const SizedBox(height: 4),
                         Text(playlist.subtitle, style: TextStyle(color: cs.onSurfaceVariant)),
                         const SizedBox(height: 6),
-                        Text('${playlist.track.length} songs', style: TextStyle(color: cs.onSurfaceVariant)),
+                        Text('${playlist.track.length} songs',
+                            style: TextStyle(color: cs.onSurfaceVariant)),
                       ],
                     ),
                   ),
@@ -75,11 +80,19 @@ class PlaylistDetailPage extends StatelessWidget {
                 final s = playlist.track[i];
                 return ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading: CircleAvatar(backgroundColor: cs.primaryContainer, child: Icon(Icons.music_note, color: cs.onPrimaryContainer)),
+                  leading: CircleAvatar(
+                    backgroundColor: cs.primaryContainer,
+                    child: Icon(Icons.music_note, color: cs.onPrimaryContainer),
+                  ),
                   title: Text(s.title, maxLines: 1, overflow: TextOverflow.ellipsis),
                   subtitle: Text(s.artist, maxLines: 1, overflow: TextOverflow.ellipsis),
-                  trailing: Text(_formatDuration(s.duration), style: TextStyle(color: cs.onSurfaceVariant)),
-                  onTap: () => onPlay(s),
+                  trailing: Text(_formatDuration(s.duration),
+                      style: TextStyle(color: cs.onSurfaceVariant)),
+                  onTap: () {
+                    // ✅ Step 4: set queue so next/prev works
+                    player.playFromQueue(playlist.track, i);
+                    onPlay(s);
+                  },
                 );
               },
             ),

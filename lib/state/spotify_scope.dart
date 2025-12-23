@@ -1,4 +1,3 @@
-// lib/state/spotify_scope.dart
 import 'package:flutter/material.dart';
 import 'spotify_session.dart';
 

@@ -11,6 +11,9 @@ import '../../widgets/section_header.dart';
 import '../../widgets/track_tile.dart';
 import '../library/playlist_detail_page.dart';
 import '../library/spotify_playlist_detail_page.dart';
+import '../../widgets/track_actions_sheet.dart';
+import '../../state/custom_playlists_scope.dart';
+import '../library/custom_playlist_detail_page.dart';
 
 class HomePage extends StatefulWidget {
   final ValueChanged<Track> onPlay;
@@ -45,7 +48,7 @@ class _HomePageState extends State<HomePage> {
       title: t.title,
       artist: t.artist,
       duration: t.duration,
-      imageUrl: t.imageUrl, // ✅ IMPORTANT: enables artwork
+      imageUrl: t.imageUrl,
       uri: t.uri,
     );
   }
@@ -55,9 +58,21 @@ class _HomePageState extends State<HomePage> {
       id: p.id,
       name: p.name,
       subtitle: p.subtitle,
-      imageUrl: p.imageUrl, // ✅ add this
+      imageUrl: p.imageUrl,
       track: const [],
     );
+  }
+
+  List<Track> _uniqueTracks(List<Track> items) {
+    final seen = <String>{};
+    final out = <Track>[];
+    for (final t in items) {
+      final key = (t.uri != null && t.uri!.isNotEmpty)
+          ? t.uri!
+          : (t.id.isNotEmpty ? t.id : "${t.title}|${t.artist}|${t.duration.inMilliseconds}");
+      if (seen.add(key)) out.add(t);
+    }
+    return out;
   }
 
   @override
@@ -65,18 +80,51 @@ class _HomePageState extends State<HomePage> {
     final session = SpotifyScope.of(context);
     final player = PlayerScope.of(context);
     final demo = DemoData();
+    final custom = CustomPlaylistsScope.of(context);
 
     final bool useSpotify = session.isLoggedIn;
 
+    // Spotify/demo playlists
     final List<Playlist> playlists = useSpotify
         ? session.myPlaylists.map(_toPlaylist).toList()
         : demo.playlists;
 
-    final List<Track> tracks = useSpotify
+    // ✅ Custom playlists -> renderable as PlaylistCard
+    final customPlaylists = custom.playlists
+        .map((p) => Playlist(
+              id: p.id,
+              name: p.name,
+              subtitle: "${p.tracks.length} songs",
+              imageUrl: p.tracks.isNotEmpty ? p.tracks.first.imageUrl : null,
+              track: p.tracks,
+            ))
+        .toList();
+
+    // ✅ Combined list shown in “Recommended for you”
+    final combinedPlaylists = [...customPlaylists, ...playlists];
+
+    final List<Track> rawTracks = useSpotify
         ? session.recentlyPlayed.map(_toTrack).toList()
         : demo.tracks;
 
-    final List<Track> quickPicks = tracks.take(5).toList();
+    final List<Track> uniqueTracks = _uniqueTracks(rawTracks);
+    final List<Track> quickPicks = uniqueTracks.take(5).toList();
+
+    final quickKeys = quickPicks
+        .map((t) => (t.uri != null && t.uri!.isNotEmpty)
+            ? t.uri!
+            : (t.id.isNotEmpty ? t.id : "${t.title}|${t.artist}|${t.duration.inMilliseconds}"))
+        .toSet();
+
+    final List<Track> recentCards = uniqueTracks
+        .where((t) {
+          final k = (t.uri != null && t.uri!.isNotEmpty)
+              ? t.uri!
+              : (t.id.isNotEmpty ? t.id : "${t.title}|${t.artist}|${t.duration.inMilliseconds}");
+          return !quickKeys.contains(k);
+        })
+        .take(8)
+        .toList();
 
     Future<void> refresh() async {
       if (!session.isLoggedIn) return;
@@ -107,27 +155,42 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(height: 12),
 
-            // --- Playlists row ---
+            // --- Playlists row (custom + spotify/demo) ---
             SizedBox(
               height: 180,
-              child: playlists.isEmpty
+              child: combinedPlaylists.isEmpty
                   ? _EmptyRowCard(
                       text: session.isLoggedIn
                           ? (session.isBusy ? "Loading your playlists..." : "No playlists found.")
-                          : "Login to see your Spotify playlists.",
+                          : "Create a custom playlist or login to see Spotify playlists.",
                     )
                   : ListView.separated(
                       scrollDirection: Axis.horizontal,
-                      itemCount: playlists.length,
+                      itemCount: combinedPlaylists.length,
                       separatorBuilder: (_, __) => const SizedBox(width: 12),
                       itemBuilder: (context, i) {
-                        final playlist = playlists[i];
+                        final playlist = combinedPlaylists[i];
 
                         return PlaylistCard(
                           playlist: playlist,
                           onTap: () {
+                            // ✅ Custom playlist
+                            if (i < customPlaylists.length) {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => CustomPlaylistDetailPage(
+                                    playlistId: playlist.id,
+                                    onPlay: widget.onPlay,
+                                  ),
+                                ),
+                              );
+                              return;
+                            }
+
+                            // ✅ Spotify playlist (offset by custom length)
+                            final offset = i - customPlaylists.length;
                             if (useSpotify) {
-                              final pLite = session.myPlaylists[i];
+                              final pLite = session.myPlaylists[offset];
                               Navigator.of(context).push(
                                 MaterialPageRoute(
                                   builder: (_) => SpotifyPlaylistDetailPage(
@@ -139,6 +202,7 @@ class _HomePageState extends State<HomePage> {
                               return;
                             }
 
+                            // ✅ Demo playlist
                             Navigator.of(context).push(
                               MaterialPageRoute(
                                 builder: (_) => PlaylistDetailPage(
@@ -175,13 +239,15 @@ class _HomePageState extends State<HomePage> {
             else
               ...List.generate(quickPicks.length, (i) {
                 final t = quickPicks[i];
-                return TrackTile(
-                  track: t,
-                  onTap: () {
-                    // ✅ THIS enables prev/next to work inside Now Playing
-                    player.playFromQueue(quickPicks, i);
-                    widget.onPlay(t); // tells Spotify to play
-                  },
+                return GestureDetector(
+                  onLongPress: () => showTrackActionsSheet(context, track: t),
+                  child: TrackTile(
+                    track: t,
+                    onTap: () {
+                      player.playFromQueue(quickPicks, i);
+                      widget.onPlay(t);
+                    },
+                  ),
                 );
               }),
 
@@ -191,7 +257,7 @@ class _HomePageState extends State<HomePage> {
 
             SizedBox(
               height: 120,
-              child: tracks.isEmpty
+              child: recentCards.isEmpty
                   ? _EmptyRowCard(
                       text: session.isLoggedIn
                           ? (session.isBusy ? "Loading..." : "Nothing played yet.")
@@ -199,15 +265,15 @@ class _HomePageState extends State<HomePage> {
                     )
                   : ListView.separated(
                       scrollDirection: Axis.horizontal,
-                      itemCount: tracks.length.clamp(0, 8),
+                      itemCount: recentCards.length,
                       separatorBuilder: (_, __) => const SizedBox(width: 12),
                       itemBuilder: (context, i) => _MiniAlbumCard(
-                        title: tracks[i].title,
-                        subtitle: tracks[i].artist,
-                        imageUrl: tracks[i].imageUrl,
+                        title: recentCards[i].title,
+                        subtitle: recentCards[i].artist,
+                        imageUrl: recentCards[i].imageUrl,
                         onTap: () {
-                          player.playFromQueue(tracks, i);
-                          widget.onPlay(tracks[i]);
+                          player.playFromQueue(recentCards, i);
+                          widget.onPlay(recentCards[i]);
                         },
                       ),
                     ),
@@ -267,8 +333,7 @@ class _MiniAlbumCard extends StatelessWidget {
                     ? Image.network(
                         imageUrl!,
                         fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) =>
-                            Icon(Icons.album, color: cs.onPrimaryContainer),
+                        errorBuilder: (_, __, ___) => Icon(Icons.album, color: cs.onPrimaryContainer),
                       )
                     : Icon(Icons.album, color: cs.onPrimaryContainer),
               ),
@@ -276,7 +341,7 @@ class _MiniAlbumCard extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(
               child: Column(
-                mainAxisSize: MainAxisSize.min, // ✅ prevents vertical overflow
+                mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
@@ -302,7 +367,6 @@ class _MiniAlbumCard extends StatelessWidget {
   }
 }
 
-
 class _EmptyRowCard extends StatelessWidget {
   final String text;
   const _EmptyRowCard({required this.text});
@@ -318,10 +382,7 @@ class _EmptyRowCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: cs.outlineVariant),
       ),
-      child: Text(
-        text,
-        style: TextStyle(color: cs.onSurfaceVariant),
-      ),
+      child: Text(text, style: TextStyle(color: cs.onSurfaceVariant)),
     );
   }
 }

@@ -4,6 +4,7 @@ import 'package:spotify_sdk/models/player_state.dart';
 import '../../models/music.dart';
 import '../../state/player_scope.dart';
 import '../../state/spotify_scope.dart';
+import '../../widgets/track_actions_sheet.dart';
 
 class NowPlayingPage extends StatefulWidget {
   const NowPlayingPage({super.key});
@@ -16,6 +17,8 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
   bool _dragging = false;
   double _dragMs = 0;
   bool _didEnsureRemote = false;
+
+  String? _lastSongKey;
 
   @override
   void didChangeDependencies() {
@@ -33,6 +36,12 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     final m = d.inMinutes;
     final s = d.inSeconds % 60;
     return "$m:${s.toString().padLeft(2, '0')}";
+  }
+
+  String _songKey(Track t) {
+    final u = t.uri;
+    if (u != null && u.isNotEmpty) return u;
+    return t.id;
   }
 
   Widget _thumb(ColorScheme cs, Track t, {double size = 44}) {
@@ -54,6 +63,33 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
     );
   }
 
+  Future<void> _playQueueIndex(int idx) async {
+    final player = PlayerScope.of(context);
+    final session = SpotifyScope.of(context);
+    final q = player.queue;
+
+    if (q.isEmpty || idx < 0 || idx >= q.length) return;
+
+    final t = q[idx];
+    final uri = t.uri;
+    if (uri == null || uri.isEmpty) return;
+
+    // 1) Ask Spotify to start the new song FIRST (prevents stale progress carryover)
+    await session.playUri(uri);
+
+    // 2) Now update your app's notion of "current"
+    player.jumpToQueueIndex(idx);
+    player.setIsPlaying(true);
+
+    // 3) Reset local slider drag state
+    if (mounted) {
+      setState(() {
+        _dragging = false;
+        _dragMs = 0;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -66,6 +102,16 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
       session.warmSavedStatus(song.id);
     }
 
+    // Reset slider state when song changes (so it never "inherits" old position visually)
+    if (song != null) {
+      final k = _songKey(song);
+      if (_lastSongKey != k) {
+        _lastSongKey = k;
+        _dragging = false;
+        _dragMs = 0;
+      }
+    }
+
     return Scaffold(
       appBar: AppBar(title: const Text('Now Playing')),
       body: song == null
@@ -75,17 +121,29 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
               builder: (context, snap) {
                 final ps = snap.data;
 
-                final bool isPlaying = ps != null ? !ps.isPaused : player.isPlaying;
+                final bool isPlaying =
+                    ps != null ? !ps.isPaused : player.isPlaying;
 
-                final int posMsInt = ps?.playbackPosition ?? 0;
-                final int durMsInt = ps?.track?.duration ?? 0;
+                // Only trust Spotify progress if Spotify's current track matches our current song.
+                final psUri = ps?.track?.uri ?? '';
+                final songUri = song.uri ?? '';
+                final bool sameTrack =
+                    songUri.isNotEmpty && psUri.isNotEmpty && psUri == songUri;
 
-                final double maxMs = (durMsInt <= 0) ? 1.0 : durMsInt.toDouble();
-                final double rawMs = _dragging ? _dragMs : posMsInt.toDouble();
+                final int posMsInt = sameTrack ? (ps?.playbackPosition ?? 0) : 0;
 
-                double clampedMs = rawMs;
-                if (clampedMs < 0) clampedMs = 0;
-                if (clampedMs > maxMs) clampedMs = maxMs;
+                // Prefer Spotify duration when it matches, otherwise fallback to your Track.duration.
+                final int durFromPs =
+                    sameTrack ? (ps?.track?.duration ?? 0) : 0;
+                final int durFromSong = song.duration.inMilliseconds;
+                final int durMsInt = (durFromPs > 0) ? durFromPs : durFromSong;
+
+                final double maxMs =
+                    (durMsInt <= 0) ? 1.0 : durMsInt.toDouble();
+                final double rawMs =
+                    _dragging ? _dragMs : posMsInt.toDouble();
+
+                double clampedMs = rawMs.clamp(0, maxMs);
 
                 final int leftMs = clampedMs.round();
                 final int rightMs = durMsInt;
@@ -93,7 +151,8 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                 // build "Up Next" indices (wrap)
                 final q = player.queue;
                 final qi = player.queueIndex;
-                final hasUpNext = q.length >= 2 && qi >= 0 && qi < q.length;
+                final hasUpNext =
+                    q.length >= 2 && qi >= 0 && qi < q.length;
 
                 List<int> upNextIdx = [];
                 if (hasUpNext) {
@@ -125,21 +184,24 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                               color: cs.primaryContainer,
                               child: (song.imageUrl != null &&
                                       song.imageUrl!.isNotEmpty)
-                                  ? Image.network(song.imageUrl!, fit: BoxFit.cover)
+                                  ? Image.network(song.imageUrl!,
+                                      fit: BoxFit.cover)
                                   : Icon(Icons.album,
-                                      size: 96, color: cs.onPrimaryContainer),
+                                      size: 96,
+                                      color: cs.onPrimaryContainer),
                             ),
                           ),
 
                           const SizedBox(height: 14),
 
-                          // title + like
+                          // title + actions
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Expanded(
                                 child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.start,
                                   children: [
                                     Text(
                                       song.title,
@@ -153,7 +215,8 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                                     const SizedBox(height: 6),
                                     Text(
                                       song.artist,
-                                      style: TextStyle(color: cs.onSurfaceVariant),
+                                      style: TextStyle(
+                                          color: cs.onSurfaceVariant),
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                     ),
@@ -161,16 +224,28 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                                 ),
                               ),
                               const SizedBox(width: 8),
+
+                              // Add to Queue / Playlist
+                              IconButton(
+                                tooltip: "Add to queue / playlist",
+                                onPressed: () =>
+                                    showTrackActionsSheet(context, track: song),
+                                icon: const Icon(Icons.playlist_add),
+                              ),
+
                               IconButton(
                                 tooltip: isLiked ? "Unlike" : "Like",
                                 onPressed: canLike
                                     ? () async {
                                         await session.toggleSaved(song.id);
                                         if (!mounted) return;
-                                        ScaffoldMessenger.of(context).showSnackBar(
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
                                           SnackBar(
                                             content: Text(
-                                              (session.savedStatusOf(song.id) == true)
+                                              (session.savedStatusOf(
+                                                          song.id) ==
+                                                      true)
                                                   ? "Added to Liked Songs"
                                                   : "Removed from Liked Songs",
                                             ),
@@ -178,14 +253,16 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                                         );
                                       }
                                     : null,
-                                icon: Icon(isLiked ? Icons.favorite : Icons.favorite_border),
+                                icon: Icon(isLiked
+                                    ? Icons.favorite
+                                    : Icons.favorite_border),
                               ),
                             ],
                           ),
 
                           const SizedBox(height: 16),
 
-                          // slider
+                          // slider (moves automatically when Spotify state updates)
                           Slider(
                             value: clampedMs,
                             max: maxMs,
@@ -204,7 +281,8 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                                       Duration(milliseconds: v.round()),
                                     );
                                     if (!ok && mounted) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
                                         const SnackBar(
                                           content: Text(
                                             "Seeking is disabled on free Spotify accounts / some contexts.",
@@ -217,21 +295,25 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                           ),
 
                           Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 8),
                             child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              mainAxisAlignment:
+                                  MainAxisAlignment.spaceBetween,
                               children: [
                                 Text(_fmtMs(leftMs),
-                                    style: TextStyle(color: cs.onSurfaceVariant)),
+                                    style: TextStyle(
+                                        color: cs.onSurfaceVariant)),
                                 Text(_fmtMs(rightMs),
-                                    style: TextStyle(color: cs.onSurfaceVariant)),
+                                    style: TextStyle(
+                                        color: cs.onSurfaceVariant)),
                               ],
                             ),
                           ),
 
                           const SizedBox(height: 18),
 
-                          // transport
+                          // transport (IMPORTANT: don't change queue index until Spotify starts new URI)
                           Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
@@ -239,12 +321,12 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                                 icon: const Icon(Icons.skip_previous),
                                 iconSize: 36,
                                 onPressed: () async {
-                                  final prev = player.prevLocal(wrap: true);
-                                  if (prev?.uri != null &&
-                                      prev!.uri!.isNotEmpty) {
-                                    await session.playUri(prev.uri!);
-                                    player.setIsPlaying(true);
-                                  }
+                                  final q = player.queue;
+                                  final qi = player.queueIndex;
+                                  if (q.isEmpty || qi < 0) return;
+                                  final prevIdx =
+                                      (qi - 1 + q.length) % q.length;
+                                  await _playQueueIndex(prevIdx);
                                 },
                               ),
                               const SizedBox(width: 8),
@@ -258,19 +340,20 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                                     player.setIsPlaying(true);
                                   }
                                 },
-                                child: Icon(isPlaying ? Icons.pause : Icons.play_arrow),
+                                child: Icon(isPlaying
+                                    ? Icons.pause
+                                    : Icons.play_arrow),
                               ),
                               const SizedBox(width: 8),
                               IconButton(
                                 icon: const Icon(Icons.skip_next),
                                 iconSize: 36,
                                 onPressed: () async {
-                                  final next = player.nextLocal(wrap: true);
-                                  if (next?.uri != null &&
-                                      next!.uri!.isNotEmpty) {
-                                    await session.playUri(next.uri!);
-                                    player.setIsPlaying(true);
-                                  }
+                                  final q = player.queue;
+                                  final qi = player.queueIndex;
+                                  if (q.isEmpty || qi < 0) return;
+                                  final nextIdx = (qi + 1) % q.length;
+                                  await _playQueueIndex(nextIdx);
                                 },
                               ),
                             ],
@@ -285,11 +368,12 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                               textAlign: TextAlign.center,
                             ),
 
-                          // ✅ Up Next
+                          // Up Next
                           if (hasUpNext) ...[
                             const SizedBox(height: 20),
                             Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              mainAxisAlignment:
+                                  MainAxisAlignment.spaceBetween,
                               children: [
                                 const Text(
                                   "Up Next",
@@ -300,12 +384,12 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                                 ),
                                 Text(
                                   "${q.length} in queue",
-                                  style: TextStyle(color: cs.onSurfaceVariant),
+                                  style: TextStyle(
+                                      color: cs.onSurfaceVariant),
                                 ),
                               ],
                             ),
                             const SizedBox(height: 10),
-
                             Container(
                               decoration: BoxDecoration(
                                 color: cs.surfaceContainerHighest,
@@ -314,7 +398,8 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                               ),
                               child: ListView.separated(
                                 shrinkWrap: true,
-                                physics: const NeverScrollableScrollPhysics(),
+                                physics:
+                                    const NeverScrollableScrollPhysics(),
                                 itemCount: upNextIdx.length,
                                 separatorBuilder: (_, __) => Divider(
                                   height: 0,
@@ -335,14 +420,10 @@ class _NowPlayingPageState extends State<NowPlayingPage> {
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                     ),
-                                    trailing: const Icon(Icons.play_arrow),
+                                    trailing:
+                                        const Icon(Icons.play_arrow),
                                     onTap: () async {
-                                      // jump in queue + play on spotify
-                                      player.jumpToQueueIndex(idx);
-                                      if (t.uri != null && t.uri!.isNotEmpty) {
-                                        await session.playUri(t.uri!);
-                                        player.setIsPlaying(true);
-                                      }
+                                      await _playQueueIndex(idx);
                                     },
                                   );
                                 },
