@@ -1,4 +1,4 @@
-# MusicApp (Flutter)
+# SoundByte (Flutter)
 
 A modern, dark-themed music app UI built with Flutter (Material 3).
 
